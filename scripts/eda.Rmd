@@ -11,14 +11,27 @@ require(data.table)
 require(magrittr)
 require(tidyverse)
 require(tidytext)
+require(h2o)
+require(feather)
 ```
 
 ```{r load data}
 # Train data
-train <- fread("../data/train.csv")
+train <- read_feather("../data/train.feather") %>% 
+  as.data.table
 
 # Test data
-test <- fread("../data/test.csv")
+test <- read_feather("../data/test.feather") %>% 
+  as.data.table
+
+class(train)
+class(test)
+
+# Convert response columns to factor
+sapply(train, class)
+sapply(test, class)
+
+train[,is_duplicate := as.factor(is_duplicate)]
 ```
 
 # Data Exploration
@@ -26,6 +39,7 @@ test <- fread("../data/test.csv")
 dim(train)
 dim(test)
 # Test is much larger than train
+# Train could likely be artificially inflated by creating new pairs of questions that do not match
 
 names(train)
 names(test)
@@ -47,6 +61,12 @@ sum(train$qid1 %in% train$qid2)
 
 An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
 
+## Pre Processing
+### Spelling correction
+### Remove stop words
+### Remove special characters
+
+# Feature Engineering
 ## Possible features
 The following is a list of features that may be helptful to incorportate:
 * Shared words
@@ -54,11 +74,59 @@ The following is a list of features that may be helptful to incorportate:
 * Shared words weighted by importance
 * Shared subject
 * word2vec features - what if all text is thrown into a copus and passed through word2vec? Numerical similarities could be computed for each question using the vector embeddings for each word - how far is the center of this sentence from the center of that sentence?
+* Question format - what type of question is used (why, how, what, etc)
 
-```{r tidytext}
+## Shared words
+Calculate the number of shared words between the two questions
+```{r}
+tidy_train <- train[,.(id, question1, question2)] %>% 
+  # head(1000) %>%
+  melt(id.var = "id", value = "question", variable = "question_num") %>% 
+  unnest_tokens(word, question) %>% 
+  as.data.table
 
+# Check dimension of resulting data
+dim(tidy_train)
+
+# Calculate scaled shared words
+shared_words <- tidy_train[,.(shared_words = sum(word[question_num == "question1"] %in% word[question_num == "question2"])/(.N/2)),
+             by = id]
+
+# Join shared words back into training data
+train %<>% merge(shared_words,
+                 by = "id")
+
+# Explore relationship between shared words and question matches
+train %>% 
+  ggplot(aes(x = is_duplicate, y = shared_words)) +
+  geom_boxplot() +
+  theme_minimal()
 ```
 
+## Question format
+Determine if the two questions have the same question key word (who, what when, where, why, how)
+```{r}
+question_words <- c(
+  "who",
+  "what",
+  "when",
+  "where",
+  "why"
+)
 
+common_question <- tidy_train[,.(common_question = any(intersect(question_words,
+                                          word[question_num == "question1"]) %in% 
+                word[question_num=="question2"])),
+           by = id]
 
+train %<>% merge(common_question,
+                 by = "id")
+
+# Plot relationship
+train[,.(common_question = mean(common_question)),
+      by = is_duplicate] %>% 
+  ggplot(aes(x = is_duplicate, y = common_question)) +
+  geom_col() +
+  theme_minimal()
+```
 
