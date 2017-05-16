@@ -1,0 +1,65 @@
+---
+title: "EDA"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+# Load libraries
+require(data.table)
+require(magrittr)
+require(tidyverse)
+require(tidytext)
+```
+
+```{r load data}
+# Train data
+train <- fread("../data/train.csv")
+
+# Test data
+test <- fread("../data/test.csv")
+```
+
+# Data Exploration
+```{r}
+dim(train)
+dim(test)
+# Test is much larger than train
+
+names(train)
+names(test)
+
+# Preview of data
+head(train, 20)
+
+# Unique qids in train
+length(unique(c(train$qid1, train$qid2)))
+
+# How many times do different ids appear?
+table(c(train$qid1, train$qid2)) %>% 
+  as.data.table %>% 
+  .[,.N, by = N]
+
+# How many ids appear in both locations?
+sum(train$qid1 %in% train$qid2)
+
+```
+
+An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
+
+## Possible features
+The following is a list of features that may be helptful to incorportate:
+* Shared words
+* Sentiment of each question
+* Shared words weighted by importance
+* Shared subject
+* word2vec features - what if all text is thrown into a copus and passed through word2vec? Numerical similarities could be computed for each question using the vector embeddings for each word - how far is the center of this sentence from the center of that sentence?
+
+```{r tidytext}
+
+```
+
+
+
+
