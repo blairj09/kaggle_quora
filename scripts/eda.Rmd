@@ -43,7 +43,6 @@ table(c(train$qid1, train$qid2)) %>%
 
 # How many ids appear in both locations?
 sum(train$qid1 %in% train$qid2)
-
 ```
 
 An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.

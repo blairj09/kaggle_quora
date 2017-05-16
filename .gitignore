@@ -40,3 +40,4 @@ data/
 
 # Notebook html files
 *.nb.html
+.Rproj.user
