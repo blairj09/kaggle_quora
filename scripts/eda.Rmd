@@ -16,35 +16,30 @@ require(feather)
 ```
 
 ```{r load data}
-# Train data
-train <- read_feather("../data/train.feather") %>% 
+# Data is preprocessed using the script pre_processing.R
+
+# Raw training data
+train <- read_feather("../data/train.feather")
+
+# Tidy data - all train data and 100000 samples from test data
+tidy_data <- read_feather("../data/tidy_data.feather") %>% 
   as.data.table
 
-# Test data
-test <- read_feather("../data/test.feather") %>% 
+# Tidy train
+tidy_train <- read_feather("../data/tidy_train.feather") %>% 
   as.data.table
 
-class(train)
-class(test)
+# Training data response column
+train_response <- read_feather("../data/train_responses.feather") %>% 
+  as.data.table
 
-# Convert response columns to factor
-sapply(train, class)
-sapply(test, class)
-
-train[,is_duplicate := as.factor(is_duplicate)]
+# Column classes
+sapply(tidy_data, class)
 ```
 
 # Data Exploration
 ```{r}
-dim(train)
-dim(test)
-# Test is much larger than train
-# Train could likely be artificially inflated by creating new pairs of questions that do not match
-
-names(train)
-names(test)
-
-# Preview of data
+# Preview of raw training data
 head(train, 20)
 
 # Unique qids in train
@@ -57,6 +52,38 @@ table(c(train$qid1, train$qid2)) %>%
 
 # How many ids appear in both locations?
 sum(train$qid1 %in% train$qid2)
+```
+
+```{r}
+# Distribution of words per question
+question_word_count <- tidy_data[,.N, by = .(question_num, id, data)][order(data, id)]
+question_word_count[which.max(N)]
+
+question_word_count[,.N, by = .(count = N, data)][,p := N/sum(N), by = data] %>% 
+  filter(count < 50) %>%
+  ggplot(aes(x = count, y = p, fill = data)) +
+  geom_col(position = "dodge") +
+  theme_minimal() +
+  labs(title = "Word Count Distribution",
+       x = "Word Count",
+       y = "Proportion")
+
+# Distribution of differences in word count between question pairs
+question_wc_diff <- question_word_count %>% 
+  dcast(id + data ~ question_num, value.var = "N") %>%
+  mutate(diff = abs(question2 - question1)) %>% 
+  as.data.table
+
+question_wc_diff[,.(count = .N), by = .(diff, data)][,p := count/sum(count), by = data] %>% 
+  filter(diff < 50) %>% 
+  ggplot(aes(x = diff, y = p, fill = data)) +
+  geom_col(position = "dodge") +
+  theme_minimal()
+
+
+# Distribution of characters per question
+
+
 ```
 
 An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
@@ -79,15 +106,6 @@ The following is a list of features that may be helptful to incorportate:
 ## Shared words
 Calculate the number of shared words between the two questions
 ```{r}
-tidy_train <- train[,.(id, question1, question2)] %>% 
-  # head(1000) %>%
-  melt(id.var = "id", value = "question", variable = "question_num") %>% 
-  unnest_tokens(word, question) %>% 
-  as.data.table
-
-# Check dimension of resulting data
-dim(tidy_train)
-
 # Calculate scaled shared words
 shared_words <- tidy_train[,.(shared_words = sum(word[question_num == "question1"] %in% word[question_num == "question2"])/(.N/2)),
              by = id]
@@ -130,3 +148,32 @@ train[,.(common_question = mean(common_question)),
   theme_minimal()
 ```
 
+## WC difference
+Determine if the difference in word count between two questions is a strong signal of similarity
+```{r}
+train %<>% merge(question_wc_diff[,.(id, wc_diff = diff)],
+                 by = "id",
+                 all.x = TRUE) %>% 
+  as.data.table
+
+train[wc_diff < 25] %>% 
+  ggplot(aes(x = is_duplicate, y = wc_diff)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+## TF IDF
+The question to consider with this approach is what to consider a document - all train vs all test? Duplicates vs non duplicates? Worth exploring several options here
+```{r}
+tf_idf_values <- tidy_data %>% 
+  count(data, word, sort = TRUE) %>% 
+  ungroup %>% 
+  bind_tf_idf(word, data, n) %>% 
+  as.data.table
+
+tidy_data %<>% merge(tf_idf_values[,.(data, word, tf_idf)],
+                 by = c("word", "data"),
+                 all.x = TRUE)
+
+# Calculate score based on tf_idf values
+```
