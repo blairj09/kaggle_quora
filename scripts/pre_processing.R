@@ -16,7 +16,7 @@ set.seed(35749)
 # Original data ----
 # Train
 train <- fread("data/train.csv")
-
+train_lemma <- fread("data/train_lemmatized.csv")
 # Test
 test <- fread("data/test.csv")
 
@@ -29,6 +29,12 @@ tidy_train <- train[,.(id, question1, question2)] %>%
   melt(id.var = "id", value = "question", variable = "question_num") %>% 
   unnest_tokens(word, question) %>% 
   mutate(data = "train") %>% 
+  as.data.table
+
+tidy_train_lemma_ds <- train_lemma[,.(id, question1_lemmas_destopped, question2_lemmas_destopped)] %>% 
+  melt(id.var = "id", value = "question", variable = "question_num") %>% 
+  unnest_tokens(word, question) %>% 
+  mutate(data = "train_lemma") %>% 
   as.data.table
 
 # Test sample
@@ -45,7 +51,9 @@ tidy_data <- rbind(tidy_train, tidy_test_sample)
 # Feather ----
 # Train data
 write_feather(train, "data/train.feather")
+write_feather(train_lemma, "data/train_lemma.feather")
 write_feather(tidy_train, "data/tidy_train.feather")
+write_feather(tidy_train_lemma_ds, "data/tidy_train_lemmas.feather")
 write_feather(train[,.(is_duplicate)], "data/train_responses.feather")
 
 # Test data
