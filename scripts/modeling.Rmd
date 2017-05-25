@@ -1,0 +1,76 @@
+---
+title: "Quora Modeling"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup}
+# Packages
+require(data.table)
+require(magrittr)
+require(h2o)
+require(feather)
+```
+
+```{r h2o initialization}
+h2o.init(nthreads = -1)
+```
+
+
+```{r data}
+# Import data into h2o
+train_h <- h2o.importFile("/Users/jamesblair/Documents/DataScience/Kaggle/kaggle_quora/data/model_train.csv",
+                          destination_frame = "train_h")
+
+train_h$is_duplicate <- as.factor(train_h$is_duplicate)
+
+# Split data into train and validation sets
+data_split <- h2o.splitFrame(train_h,
+                             destination_frames = c("train", "validate"),
+                             seed = 35749)
+```
+
+# Modeling
+## Features
+```{r features}
+# Define response
+y <- "is_duplicate"
+x <- setdiff(names(train_h), 
+             c(y, "id"))
+
+x
+```
+
+## Models
+### GBM
+```{r}
+# Create baseline gbm model with default parameters
+gbm_baseline <- h2o.gbm(
+  x = x,
+  y = y,
+  training_frame = "train",
+  validation_frame = "validate",
+  model_id = "gbm_baseline"
+)
+
+# Extract logloss of validation data
+h2o.logloss(gbm_baseline, valid = TRUE)
+
+# Investigate feature importances
+gbm_fi <- h2o.varimp(gbm_baseline) %>% 
+  as.data.table
+
+gbm_fi[,variable := factor(variable, levels = variable[order(scaled_importance)])]
+
+gbm_fi %>% 
+  ggplot(aes(x = variable, y = scaled_importance)) +
+  geom_col() +
+  coord_flip() +
+  theme_minimal()
+```
+
+
+
+
+
