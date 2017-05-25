@@ -400,6 +400,7 @@ train %>%
 ```{r}
 # These files contain the features derived in this notebook - important to note when loading data back in
 write_feather(train, "../data/train_features.feather")
+fwrite(train, "data/train_features.csv")
 write_feather(train_lemma, "../data/train_lemma_features.feather")
 
 # Save out model dataset
