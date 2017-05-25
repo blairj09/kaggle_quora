@@ -1,5 +1,5 @@
 ---
-title: "EDA"
+title: "Quora EDA"
 output: html_notebook
 editor_options: 
   chunk_output_type: inline
@@ -18,9 +18,14 @@ require(feather)
 ```{r load data}
 # Data is preprocessed using the script pre_processing.R
 
-# Raw training data
+# Raw training data + previously derived features
 train <- read_feather("../data/train_features.feather") %>% 
   as.data.table
+
+# Training data lemmatized by Joey + previously derived features
+train_lemma <- read_feather("../data/train_lemma_features.feather") %>% 
+  as.data.table
+train_lemma[,id := as.character(id)]
 
 # Tidy data - all train data and 100000 samples from test data
 tidy_data <- read_feather("../data/tidy_data.feather") %>% 
@@ -327,13 +332,75 @@ Create features from word2vec embeddings
 * SD of question 1
 * SD of question 2
 
+Initial w2v encodings are averaged over each question - essentially each question in each training observation is represented as a vector of 25 values that represents the average vector of all words in that question.
+```{r}
+# Distance betwen question means
+# This results in 25 features for each question pair
+train_lemma_w2v_long <- train_lemma %>% 
+  select(id, starts_with("C")) %>% 
+  melt(id.var = "id") %>% 
+  as.data.table
+
+train_lemma_w2v_long[,c("vector", "question") := tstrsplit(variable, ".", fixed = TRUE)]
+
+# Calculate differences for each distinct w2v value
+w2v_differences <- train_lemma_w2v_long %>% 
+  select(id, value, vector, question) %>% 
+  dcast(id + vector ~ question, value.var = "value") %>% 
+  mutate(diff = abs(x - y)) %>% 
+  as.data.table
+
+# Individual differences - difference for each value in w2v vector
+w2v_individual_differences <- w2v_differences %>% 
+  select(id, vector, diff) %>%
+  dcast(id ~ vector, value.var = "diff") %>% 
+  as.data.table
+
+# Average difference for each question pair
+w2v_average_difference <- w2v_differences[,.(avg_w2v_diff = mean(diff)),
+                                          by = id]
+```
+
+It may be worth investigating PCA on w2v encodings.
+
 
 Visualize results with t-SNE - do duplicates and non duplicates distinguish themselves?
+
+Join w2v encodings back into original train data
+```{r}
+train %<>% merge(w2v_individual_differences,
+                 by = "id")
+
+train %<>% merge(w2v_average_difference,
+                 by = "id")
+```
+
+### w2v impact
+Explore the relationship between w2v features and response
+```{r}
+# Average distance
+names(train)
+train %>% 
+  ggplot(aes(x = is_duplicate, y = avg_w2v_diff)) +
+  geom_boxplot() +
+  theme_minimal()
+
+# The 25 individual differences
+train %>% 
+  select(id, is_duplicate, matches("^C[0-9]+")) %>% 
+  melt(id.var = c("id", "is_duplicate")) %>% 
+  ggplot(aes(x = is_duplicate, y = value)) +
+  geom_boxplot() +
+  facet_wrap(~variable) +
+  theme_minimal()
+```
 
 
 # Save results
 ```{r}
+# These files contain the features derived in this notebook - important to note when loading data back in
 write_feather(train, "../data/train_features.feather")
+fwrite(train, "data/train_features.csv")
 write_feather(train_lemma, "../data/train_lemma_features.feather")
 ```
 
