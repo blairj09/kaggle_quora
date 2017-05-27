@@ -1,0 +1,108 @@
+---
+title: "quora"
+author: "Mauro Vicic"
+date: "5/23/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(java.parameters = "- Xmx1024m")
+library(data.table)
+library(openNLP)
+library(NLP)
+```
+Loading data
+
+```{r}
+dataQ = fread("train_lemmatized.csv")
+```
+
+Getting a vector with information if questions share the last word, 0 if they don't 1 if they do.
+```{r}
+n = 0
+lastW = sapply(1:nrow(dataQ), function(x){
+  qOne = strsplit(dataQ$question1_lemmas_destopped[x], " ")
+  qTwo = strsplit(dataQ$question2_lemmas_destopped[x], " ")
+  if(length(qOne[[1]])>1){
+  wOne = qOne[[1]][(length(qOne[[1]])-1)]
+  }
+  if(length(qTwo[[1]])>1){
+  wTwo = qTwo[[1]][(length(qTwo[[1]])-1)]
+  }
+  if(length(qOne[[1]])<2){
+  wOne = "-"
+  }
+  if(length(qTwo[[1]])<2){
+  wTwo = "+"
+  }
+  if(wOne == wTwo){
+    return(1)
+  }
+  if(wOne != wTwo){
+    return(0)
+  }
+})
+
+
+```
+
+Annotation function
+```{r}
+annotators <- list(sent_token = Maxent_Sent_Token_Annotator(),
+                   word_token = Maxent_Word_Token_Annotator(),
+                   pos_tag    = Maxent_POS_Tag_Annotator())
+
+tagPOS <- function(x, ann = annotators) {
+  s <- as.String(x)
+  a2 <- annotate(s, list(ann$sent_token, ann$word_token))
+  a3 <- annotate(s, ann$pos_tag, a2)
+  a3w <- subset(a3, type == "word")
+  POStags <- unlist(lapply(a3w$features, `[[`, "POS"))
+  return(paste(POStags,collapse = " "))
+}
+```
+
+Creating a vector that contains the number of nouns shared that followed by a verb(potentially the subject of a question)
+```{r}
+verbs = c("VBD", "VBG", "VBN", "VBP", "VBZ", "VB")
+nouns = c("NN", "NNS", "NNP", "NNPS", "PRP")
+nounVerbComb = sapply(1:nrow(dataQ), function(x){
+    qOne = strsplit(dataQ$question1_lemmas[x], " ")
+    qTwo = strsplit(dataQ$question2_lemmas[x], " ")
+    tagged_qOne = tagPOS(dataQ$question1_lemmas[x])
+    tagged_qTwo = tagPOS(dataQ$question2_lemmas[x])
+    tagged_qOneSplit = strsplit(tagged_qOne, " ")
+    tagged_qTwoSplit = strsplit(tagged_qTwo[[1]], " ")
+    subj_qOne = "one"
+    subj_qTwo = "two"
+    
+    subj_qOne = sapply(1:(length(tagged_qOneSplit[[1]])-2),function(y){
+      if(length(tagged_qOneSplit[[1]])<3){
+         return("1")
+      }
+      if(length(tagged_qOneSplit[[1]])>2){
+        if(tagged_qOneSplit[[1]][y+1]%in%nouns&tagged_qOneSplit[[1]][y+2]%in%verbs){
+          return(qOne[[1]][y+1])
+        }
+        else
+          return("1")
+      }
+    })
+    subj_qTwo = sapply(1:(length(tagged_qTwoSplit[[1]])-2),function(y){
+      if(length(tagged_qTwoSplit[[1]])<3){
+        return("0")
+      }
+      if(length(tagged_qTwoSplit[[1]])>2){
+        if(tagged_qTwoSplit[[1]][y+1]%in%nouns&tagged_qTwoSplit[[1]][y+2]%in%verbs){
+          return(qTwo[[1]][y+1])
+        }
+        else
+          return("2")
+      }
+    })
+    return(length(intersect(subj_qOne,subj_qTwo)))
+      
+    })
+table(nounVerbComb)
+```
