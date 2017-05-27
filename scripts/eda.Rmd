@@ -1,5 +1,5 @@
 ---
-title: "EDA"
+title: "Quora EDA"
 output: html_notebook
 editor_options: 
   chunk_output_type: inline
@@ -16,36 +16,43 @@ require(feather)
 ```
 
 ```{r load data}
-# Train data
-train <- read_feather("../data/train.feather") %>% 
+# Data is preprocessed using the script pre_processing.R
+
+# Raw training data + previously derived features
+train <- read_feather("../data/train_features.feather") %>% 
   as.data.table
 
-# Test data
-test <- read_feather("../data/test.feather") %>% 
+# Training data lemmatized by Joey + previously derived features
+train_lemma <- read_feather("../data/train_lemma_features.feather") %>% 
+  as.data.table
+train_lemma[,id := as.character(id)]
+
+# Tidy data - all train data and 100000 samples from test data
+tidy_data <- read_feather("../data/tidy_data.feather") %>% 
   as.data.table
 
-class(train)
-class(test)
+# Tidy train
+tidy_train <- read_feather("../data/tidy_train.feather") %>% 
+  as.data.table
 
-# Convert response columns to factor
+# Load lemetized data from Joey
+tidy_train_lemma <- read_feather("../data/tidy_train_lemmas.feather") %>% 
+  as.data.table
+tidy_train_lemma[,id := as.character(id)]
+
+# Training data response column
+train_response <- read_feather("../data/train_responses.feather") %>% 
+  as.data.table
+
+# Column classes
 sapply(train, class)
-sapply(test, class)
-
-train[,is_duplicate := as.factor(is_duplicate)]
 ```
 
 # Data Exploration
 ```{r}
-dim(train)
-dim(test)
-# Test is much larger than train
-# Train could likely be artificially inflated by creating new pairs of questions that do not match
-
-names(train)
-names(test)
-
-# Preview of data
+# Preview of raw training data
 head(train, 20)
+head(train_lemma, 20)
 
 # Unique qids in train
 length(unique(c(train$qid1, train$qid2)))
@@ -57,6 +64,48 @@ table(c(train$qid1, train$qid2)) %>%
 
 # How many ids appear in both locations?
 sum(train$qid1 %in% train$qid2)
+```
+
+```{r}
+# Distribution of words per question
+question_word_count <- tidy_data[,.N, by = .(question_num, id, data)][order(data, id)]
+
+# Lemmatized and destopped word count
+lemma_word_count <- tidy_train_lemma[,.N, by = .(question_num, id, data)][order(data, id)]
+
+# Longest question
+question_word_count[which.max(N)]
+View(train[id == question_word_count[which.max(N)]$id])
+
+question_word_count[,.N, by = .(count = N, data)][,p := N/sum(N), by = data] %>% 
+  filter(count < 50) %>%
+  ggplot(aes(x = count, y = p, fill = data)) +
+  geom_col(position = "dodge") +
+  theme_minimal() +
+  labs(title = "Word Count Distribution",
+       x = "Word Count",
+       y = "Proportion")
+
+lemma_word_count %>% 
+  filter(N < 50) %>% 
+  ggplot(aes(x = N)) +
+  geom_histogram() +
+  theme_minimal()
+
+# Distribution of differences in word count between question pairs
+question_wc_diff <- question_word_count %>% 
+  dcast(id + data ~ question_num, value.var = "N") %>%
+  mutate(diff = abs(question2 - question1)) %>% 
+  as.data.table
+
+question_wc_diff[,.(count = .N), by = .(diff, data)][,p := count/sum(count), by = data] %>% 
+  filter(diff < 50) %>% 
+  ggplot(aes(x = diff, y = p, fill = data)) +
+  geom_col(position = "dodge") +
+  theme_minimal()
+
+
+# Distribution of characters per question
 ```
 
 An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
@@ -79,28 +128,47 @@ The following is a list of features that may be helptful to incorportate:
 ## Shared words
 Calculate the number of shared words between the two questions
 ```{r}
-tidy_train <- train[,.(id, question1, question2)] %>% 
-  # head(1000) %>%
-  melt(id.var = "id", value = "question", variable = "question_num") %>% 
-  unnest_tokens(word, question) %>% 
-  as.data.table
-
-# Check dimension of resulting data
-dim(tidy_train)
-
 # Calculate scaled shared words
-shared_words <- tidy_train[,.(shared_words = sum(word[question_num == "question1"] %in% word[question_num == "question2"])/(.N/2)),
-             by = id]
+shared_words <- tidy_data[,.(shared_words = (sum(word[question_num == "question1"] %in% word[question_num == "question2"]) +
+                                               sum(word[question_num == "question2"] %in% word[question_num == "question1"]))/.N),
+                          by = id]
+
+lemma_shared_words <- tidy_train_lemma[,.(lemma_shared_words = (sum(word[question_num == "question1_lemmas_destopped"] %in% word[question_num == "question2_lemmas_destopped"]) +
+                                               sum(word[question_num == "question2_lemmas_destopped"] %in% word[question_num == "question1_lemmas_destopped"]))/.N),
+                          by = .(id = as.character(id))]
+
+# Distribution of shared_words values
+shared_words %>% 
+  ggplot(aes(x = shared_words)) +
+  geom_histogram() +
+  theme_minimal()
+
+lemma_shared_words %>% 
+  ggplot(aes(x = lemma_shared_words)) +
+  geom_histogram() +
+  theme_minimal()
+
+summary(shared_words$shared_words)
+summary(lemma_shared_words$lemma_shared_words)
 
 # Join shared words back into training data
-train %<>% merge(shared_words,
+train %<>% merge(lemma_shared_words,
                  by = "id")
 
 # Explore relationship between shared words and question matches
-train %>% 
-  ggplot(aes(x = is_duplicate, y = shared_words)) +
+train %>%
+  ggplot(aes(x = is_duplicate, y = lemma_shared_words)) +
   geom_boxplot() +
   theme_minimal()
+
+train %>%
+  ggplot(aes(x = lemma_shared_words, fill = is_duplicate)) +
+  geom_histogram(position = "dodge") +
+  theme_minimal()
+
+# What are the questions with a complete shared words score yet are labeled as different questions?
+train[shared_words == 1 & is_duplicate == 0]
+# Some of these are mis labeled, while others are the same words but with the meaning of the question flipped
 ```
 
 ## Question format
@@ -111,10 +179,11 @@ question_words <- c(
   "what",
   "when",
   "where",
-  "why"
+  "why",
+  "how"
 )
 
-common_question <- tidy_train[,.(common_question = any(intersect(question_words,
+common_question <- tidy_data[,.(common_question = any(intersect(question_words,
                                           word[question_num == "question1"]) %in% 
                 word[question_num=="question2"])),
            by = id]
@@ -128,5 +197,216 @@ train[,.(common_question = mean(common_question)),
   ggplot(aes(x = is_duplicate, y = common_question)) +
   geom_col() +
   theme_minimal()
+```
+
+## WC difference
+Determine if the difference in word count between two questions is a strong signal of similarity
+```{r}
+train %<>% merge(question_wc_diff[,.(id, wc_diff = diff)],
+                 by = "id",
+                 all.x = TRUE) %>% 
+  as.data.table
+
+train[wc_diff < 25] %>% 
+  ggplot(aes(x = is_duplicate, y = wc_diff)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+## TF IDF
+The question to consider with this approach is what to consider a document - all train vs all test? Duplicates vs non duplicates? Worth exploring several options here
+```{r}
+# Each pair of questions is considered a document - perhaps not the ideal approach
+tf_idf_values <- tidy_train_lemma %>% 
+  count(id, word, sort = TRUE) %>% 
+  ungroup %>% 
+  bind_tf_idf(word, id, n) %>% 
+  as.data.table
+
+tf_idf_values[order(-tf_idf)]
+
+tidy_train_lemma %<>% merge(tf_idf_values[,.(word, id, tf_idf)],
+                 by = c("word", "id"),
+                 all.x = TRUE)
+
+names(tidy_train_lemma)
+
+# Calculate score based on tf_idf values
+tf_idf_score <- tidy_train_lemma[,.(tf_idf_score = sum(tf_idf[word[question_num == "question2_lemmas_destopped"] %in% word[question_num == "question1_lemmas_destopped"]]) / sum(tf_idf)),
+                                    by = id]
+
+# Distribution of score
+tf_idf_score %>% 
+  ggplot(aes(x = tf_idf_score)) +
+  geom_histogram() +
+  theme_minimal()
+
+train %<>% merge(tf_idf_score,
+                 by = "id")
+
+# Does separation exist between duplicates and non duplicates using tf_idf score?
+train %>% 
+  ggplot(aes(x = is_duplicate, y = tf_idf_score)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+## Word2Vec
+Word to vec provides vector embeddings of words based on their proximity to one another in a corpus.
+```{r h2o}
+# Initialize h2o
+h2o.init(nthreads = -1)
+```
+
+Prepare data and move it to h2o. This section loosly follows the kernel found at https://www.kaggle.com/brandenkmurray/h2o-word2vec-starter.
+```{r}
+# This section foll
+# Use lemmatized training questions
+train_lemma[sample(1:.N, 10), question1_lemmas_destopped]
+
+# Remove problem characters
+train_lemma[,":="(question1_lemmas_destopped = gsub("'|\"|'|“|”|\"|\n|,|\\.|…|\\?|\\+|\\-|\\/|\\=|\\(|\\)|‘", "", question1_lemmas_destopped),
+                  question2_lemmas_destopped = gsub("'|\"|'|“|”|\"|\n|,|\\.|…|\\?|\\+|\\-|\\/|\\=|\\(|\\)|‘", "", question2_lemmas_destopped))]
+
+# Remove double spaces
+train_lemma[,":="(question1_lemmas_destopped=gsub("  ", " ", question1_lemmas_destopped),
+                  question2_lemmas_destopped=gsub("  ", " ", question2_lemmas_destopped))]
+
+# Condense data to include only unique questions
+train_lemma_c <- rbind(train_lemma[,.(q = question1_lemmas_destopped)],
+                       train_lemma[,.(q = question2_lemmas_destopped)])
+
+train_lemma_c <- unique(train_lemma_c)
+dim(train_lemma_c)
+
+train_lemma_h <- as.h2o(train_lemma_c,
+                        destination_frame = "train_lemma_h")
+
+words <- h2o.tokenize(train_lemma_h$q, "\\\\W+")
+```
+
+Run word2vec model and extract numerical embeddings of words
+```{r}
+w2v_out <- h2o.word2vec(
+  words,
+  model_id = "word2vec_model",
+  vec_size = 25,
+  window_size = 5,
+  init_learning_rate = 0.025,
+  sent_sample_rate = 0,
+  epochs = 5
+)
+
+# Check integrity of w2v model
+# Find synonym for water
+h2o.findSynonyms(w2v_out, "water", 5)
+
+# Retrieve w2v embeddings for training data
+# Center of each question
+w2v_encodings <- h2o.transform(w2v_out, words, "AVERAGE") %>% 
+  as.data.table
+
+dim(w2v_encodings)
+train_lemma_c %<>% cbind(w2v_encodings)
+
+# Join w2v encodings to train_lemma
+train_lemma %<>% merge(train_lemma_c,
+                       by.x = "question1_lemmas_destopped",
+                       by.y = "q",
+                       sort = FALSE,
+                       all.x = TRUE)
+
+train_lemma %<>% merge(train_lemma_c,
+                       by.x = "question2_lemmas_destopped",
+                       by.y = "q",
+                       sort = FALSE,
+                       all.x = TRUE)
+
+names(train_lemma)
+```
+
+Create features from word2vec embeddings
+* Distance of nearest terms
+* Distance of farthest terms
+* Distance between question means
+* SD of question 1
+* SD of question 2
+
+Initial w2v encodings are averaged over each question - essentially each question in each training observation is represented as a vector of 25 values that represents the average vector of all words in that question.
+```{r}
+# Distance betwen question means
+# This results in 25 features for each question pair
+train_lemma_w2v_long <- train_lemma %>% 
+  select(id, starts_with("C")) %>% 
+  melt(id.var = "id") %>% 
+  as.data.table
+
+train_lemma_w2v_long[,c("vector", "question") := tstrsplit(variable, ".", fixed = TRUE)]
+
+# Calculate differences for each distinct w2v value
+w2v_differences <- train_lemma_w2v_long %>% 
+  select(id, value, vector, question) %>% 
+  dcast(id + vector ~ question, value.var = "value") %>% 
+  mutate(diff = abs(x - y)) %>% 
+  as.data.table
+
+# Individual differences - difference for each value in w2v vector
+w2v_individual_differences <- w2v_differences %>% 
+  select(id, vector, diff) %>%
+  dcast(id ~ vector, value.var = "diff") %>% 
+  as.data.table
+
+# Average difference for each question pair
+w2v_average_difference <- w2v_differences[,.(avg_w2v_diff = mean(diff)),
+                                          by = id]
+```
+
+It may be worth investigating PCA on w2v encodings.
+
+
+Visualize results with t-SNE - do duplicates and non duplicates distinguish themselves?
+
+Join w2v encodings back into original train data
+```{r}
+train %<>% merge(w2v_individual_differences,
+                 by = "id")
+
+train %<>% merge(w2v_average_difference,
+                 by = "id")
+```
+
+### w2v impact
+Explore the relationship between w2v features and response
+```{r}
+# Average distance
+names(train)
+train %>% 
+  ggplot(aes(x = is_duplicate, y = avg_w2v_diff)) +
+  geom_boxplot() +
+  theme_minimal()
+
+# The 25 individual differences
+train %>% 
+  select(id, is_duplicate, matches("^C[0-9]+")) %>% 
+  melt(id.var = c("id", "is_duplicate")) %>% 
+  ggplot(aes(x = is_duplicate, y = value)) +
+  geom_boxplot() +
+  facet_wrap(~variable) +
+  theme_minimal()
+```
+
+
+# Save results
+```{r}
+# These files contain the features derived in this notebook - important to note when loading data back in
+write_feather(train, "../data/train_features.feather")
+fwrite(train, "data/train_features.csv")
+write_feather(train_lemma, "../data/train_lemma_features.feather")
+
+# Save out model dataset
+train %>% 
+  # Remove unnecessary columns
+  select(-qid1, -qid2, -question1, -question2) %>% 
+  fwrite(file = "../data/model_train.csv")
 ```
 
