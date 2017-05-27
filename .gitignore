@@ -41,3 +41,8 @@ data/
 # Notebook html files
 *.nb.html
 .Rproj.user
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+.idea/*
