@@ -6,46 +6,75 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+##knitr::opts_chunk$set(echo = TRUE)
 options(java.parameters = "- Xmx1024m")
 library(data.table)
+library(magrittr)
+library(tidyverse)
 library(openNLP)
 library(NLP)
+library(feather)
+library(tidytext)
 ```
 Loading data
 
 ```{r}
-dataQ = fread("train_lemmatized.csv")
+# dataQ = fread("train_lemmatized.csv")
+dataQ <- read_feather("../data/train_lemma.feather") %>% 
+  as.data.table
+
+tidy_train <- read_feather("../data/tidy_train_lemmas.feather") %>% 
+  as.data.table
+
+train_labels <- read_feather("../data/train_responses.feather") %>% 
+  as.data.table
+
+train_labels[,id := as.numeric(id)]
 ```
 
 Getting a vector with information if questions share the last word, 0 if they don't 1 if they do.
 ```{r}
-n = 0
-lastW = sapply(1:nrow(dataQ), function(x){
-  qOne = strsplit(dataQ$question1_lemmas_destopped[x], " ")
-  qTwo = strsplit(dataQ$question2_lemmas_destopped[x], " ")
-  if(length(qOne[[1]])>1){
-  wOne = qOne[[1]][(length(qOne[[1]])-1)]
-  }
-  if(length(qTwo[[1]])>1){
-  wTwo = qTwo[[1]][(length(qTwo[[1]])-1)]
-  }
-  if(length(qOne[[1]])<2){
-  wOne = "-"
-  }
-  if(length(qTwo[[1]])<2){
-  wTwo = "+"
-  }
-  if(wOne == wTwo){
-    return(1)
-  }
-  if(wOne != wTwo){
-    return(0)
-  }
-})
-
-
+# n = 0
+# lastW = sapply(1:nrow(dataQ), function(x){
+#   qOne = strsplit(dataQ$question1_lemmas_destopped[x], " ")
+#   qTwo = strsplit(dataQ$question2_lemmas_destopped[x], " ")
+#   if(length(qOne[[1]])>1){
+#   wOne = qOne[[1]][(length(qOne[[1]])-1)]
+#   }
+#   if(length(qTwo[[1]])>1){
+#   wTwo = qTwo[[1]][(length(qTwo[[1]])-1)]
+#   }
+#   if(length(qOne[[1]])<2){
+#   wOne = "-"
+#   }
+#   if(length(qTwo[[1]])<2){
+#   wTwo = "+"
+#   }
+#   if(wOne == wTwo){
+#     return(1)
+#   }
+#   if(wOne != wTwo){
+#     return(0)
+#   }
+# })
 ```
+
+```{r}
+# Same as above, but using tidy text data.table
+last_word_identical <- tidy_train[,word[.N],by = .(question_num, id)] %>% 
+  dcast(id ~ question_num, value.var = "V1") %>% 
+  group_by(id) %>% 
+  summarize(same_last_word = question1_lemmas_destopped == question2_lemmas_destopped) %>% 
+  as.data.table
+
+# How does last name identical relate to target?
+last_word_identical %<>% merge(train_labels,
+                               by = "id")
+
+last_word_identical[,mean(same_last_word, na.rm = TRUE), by = is_duplicate]
+last_word_identical[,mean(as.numeric(is_duplicate), na.rm = TRUE), by = same_last_word]
+```
+
 
 Annotation function
 ```{r}
@@ -105,4 +134,58 @@ nounVerbComb = sapply(1:nrow(dataQ), function(x){
       
     })
 table(nounVerbComb)
+```
+
+```{r}
+# Parallel version of above -- not working
+all_cores <- parallel::makeCluster(16)
+parallel::clusterExport(all_cores, "annotators")
+
+nounVerbComb <- parallel::parSapply(all_cores, 1:nrow(dataQ), function(x){
+    qOne = strsplit(dataQ$question1_lemmas[x], " ")
+    qTwo = strsplit(dataQ$question2_lemmas[x], " ")
+    tagged_qOne = tagPOS(dataQ$question1_lemmas[x])
+    tagged_qTwo = tagPOS(dataQ$question2_lemmas[x])
+    tagged_qOneSplit = strsplit(tagged_qOne, " ")
+    tagged_qTwoSplit = strsplit(tagged_qTwo[[1]], " ")
+    subj_qOne = "one"
+    subj_qTwo = "two"
+    
+    subj_qOne = sapply(1:(length(tagged_qOneSplit[[1]])-2),function(y){
+      if(length(tagged_qOneSplit[[1]])<3){
+         return("1")
+      }
+      if(length(tagged_qOneSplit[[1]])>2){
+        if(tagged_qOneSplit[[1]][y+1]%in%nouns&tagged_qOneSplit[[1]][y+2]%in%verbs){
+          return(qOne[[1]][y+1])
+        }
+        else
+          return("1")
+      }
+    })
+    subj_qTwo = sapply(1:(length(tagged_qTwoSplit[[1]])-2),function(y){
+      if(length(tagged_qTwoSplit[[1]])<3){
+        return("0")
+      }
+      if(length(tagged_qTwoSplit[[1]])>2){
+        if(tagged_qTwoSplit[[1]][y+1]%in%nouns&tagged_qTwoSplit[[1]][y+2]%in%verbs){
+          return(qTwo[[1]][y+1])
+        }
+        else
+          return("2")
+      }
+    })
+    return(length(intersect(subj_qOne,subj_qTwo)))
+    })
+
+parallel::stopCluster(all_cores)
+```
+
+```{r}
+tags = sapply(1:nrow(tidy_train), function(x){
+  tagPOS(tidy_train$word[x])
+  if(x == 100000){
+    print(x)
+  }
+})
 ```

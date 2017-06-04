@@ -9,6 +9,7 @@ require(data.table)
 require(magrittr)
 require(feather)
 require(dplyr)
+require(tidytext)
 
 # Random seed ----
 set.seed(35749)
@@ -31,10 +32,21 @@ tidy_train <- train[,.(id, question1, question2)] %>%
   mutate(data = "train") %>% 
   as.data.table
 
-tidy_train_lemma_ds <- train_lemma[,.(id, question1_lemmas_destopped, question2_lemmas_destopped)] %>% 
-  melt(id.var = "id", value = "question", variable = "question_num") %>% 
+tidy_train_lemma_ds <- train_lemma[,.(id, is_duplicate, question1_lemmas_destopped, question2_lemmas_destopped)] %>% 
+  melt(id.var = c("id", "is_duplicate"), value = "question", variable = "question_num") %>% 
   unnest_tokens(word, question) %>% 
   mutate(data = "train_lemma") %>% 
+  as.data.table
+
+# Train ngrams
+tidy_train_bigrams <- train[,.(id, question1, question2, is_duplicate)] %>% 
+  melt(id.var = c("id", "is_duplicate"), value = "question", variable = "question_num") %>% 
+  unnest_tokens(bigram, question, token = "ngrams", n = 2) %>% 
+  as.data.table
+
+tidy_train_lemma_bigrams <- train_lemma[,.(id, question1_lemmas_destopped, question2_lemmas_destopped, is_duplicate)] %>% 
+  melt(id.var = c("id", "is_duplicate"), value = "question", variable = "question_num") %>% 
+  unnest_tokens(bigram, question, token = "ngrams", n = 2) %>% 
   as.data.table
 
 # Test sample
@@ -54,6 +66,7 @@ write_feather(train, "data/train.feather")
 write_feather(train_lemma, "data/train_lemma.feather")
 write_feather(tidy_train, "data/tidy_train.feather")
 write_feather(tidy_train_lemma_ds, "data/tidy_train_lemmas.feather")
+write_feather(tidy_train_lemma_bigrams, "data/tidy_train_lemmas_bigrams.feather")
 write_feather(train[,.(is_duplicate)], "data/train_responses.feather")
 
 # Test data

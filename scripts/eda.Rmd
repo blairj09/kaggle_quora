@@ -10,6 +10,7 @@ editor_options:
 require(data.table)
 require(magrittr)
 require(tidyverse)
+require(dtplyr)
 require(tidytext)
 require(h2o)
 require(feather)
@@ -20,6 +21,10 @@ require(feather)
 
 # Raw training data + previously derived features
 train <- read_feather("../data/train_features.feather") %>% 
+  as.data.table
+
+# Raw training data
+train <- read_feather("../data/train.feather") %>% 
   as.data.table
 
 # Training data lemmatized by Joey + previously derived features
@@ -39,6 +44,9 @@ tidy_train <- read_feather("../data/tidy_train.feather") %>%
 tidy_train_lemma <- read_feather("../data/tidy_train_lemmas.feather") %>% 
   as.data.table
 tidy_train_lemma[,id := as.character(id)]
+
+tidy_train_lemma_bigrams <- read_feather("../data/tidy_train_lemmas_bigrams.feather") %>% 
+  as.data.table
 
 # Training data response column
 train_response <- read_feather("../data/train_responses.feather") %>% 
@@ -108,12 +116,37 @@ question_wc_diff[,.(count = .N), by = .(diff, data)][,p := count/sum(count), by 
 # Distribution of characters per question
 ```
 
-An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
+There may be certain features that are oddly connected to duplicate questions. These features are unintuitive yet they provide signal. These features may be the result of leakage and may not actually relate to the target function. However, within the scope of the competition they make sense.
+```{r}
+# Number of times a question ID appears in the set compared against is_duplicate
+# This has been identified on Kaggle as a "magic feature"
+train[,.(id, qid1, qid2, is_duplicate)] %>% 
+  melt(id.var = c("id", "is_duplicate")) %>% 
+  group_by(is_duplicate, value) %>% 
+  summarize(count = n()) %>% 
+  ungroup() %>% 
+  group_by(count) %>% 
+  summarize(duplicate_p = mean(as.numeric(is_duplicate))) %>% 
+  ggplot(aes(x = count, y = duplicate_p)) +
+  geom_col() +
+  theme_minimal() +
+  xlim(c(0, 60)) +
+  labs(main = "Duplicate IDs and Duplicate Pct",
+       x = "ID Count",
+       y = "Pct As Duplicate")
 
-## Pre Processing
-### Spelling correction
-### Remove stop words
-### Remove special characters
+# Are there certain words the appear more often in duplicates vs. non duplicates
+tidy_train_lemma[,.N, by = .(word, is_duplicate)][,p := round(N/sum(N), 4), by = is_duplicate] %>% 
+  dcast(word ~ is_duplicate, value.var = "p", fill = 0) %>% 
+  mutate(diff = `1` - `0`) %>% 
+  arrange(-diff)
+
+# Same question, but with bigrams
+
+```
+
+
+An important question here is what makes two questions the same? Questions are the same if the *main idea* is the same, even if the phrasing changes. The algorithm needs to be able to pick up on the *main idea* of each question and determine how much they overlap.
 
 # Feature Engineering
 ## Possible features
@@ -260,7 +293,12 @@ h2o.init(nthreads = -1)
 
 Prepare data and move it to h2o. This section loosly follows the kernel found at https://www.kaggle.com/brandenkmurray/h2o-word2vec-starter.
 ```{r}
-# This section foll
+# Remove previously assigned w2v values
+train_lemma <- train_lemma %>% 
+  select(-starts_with("C")) %>% 
+  as.data.table
+
+# This section follows the kernel at https://www.kaggle.com/brandenkmurray/h2o-word2vec-starter
 # Use lemmatized training questions
 train_lemma[sample(1:.N, 10), question1_lemmas_destopped]
 
@@ -290,7 +328,7 @@ Run word2vec model and extract numerical embeddings of words
 w2v_out <- h2o.word2vec(
   words,
   model_id = "word2vec_model",
-  vec_size = 25,
+  vec_size = 200,
   window_size = 5,
   init_learning_rate = 0.025,
   sent_sample_rate = 0,
@@ -385,14 +423,17 @@ train %>%
   geom_boxplot() +
   theme_minimal()
 
+# Not suitable for the larger feature space of 200 w2v features
 # The 25 individual differences
-train %>% 
-  select(id, is_duplicate, matches("^C[0-9]+")) %>% 
-  melt(id.var = c("id", "is_duplicate")) %>% 
-  ggplot(aes(x = is_duplicate, y = value)) +
-  geom_boxplot() +
-  facet_wrap(~variable) +
-  theme_minimal()
+# train %>% 
+#   select(id, is_duplicate, matches("^C[0-9]+")) %>% 
+#   melt(id.var = c("id", "is_duplicate")) %>% 
+#   ggplot(aes(x = is_duplicate, y = value)) +
+#   geom_boxplot() +
+#   facet_wrap(~variable) +
+#   theme_minimal()
+
+
 ```
 
 
